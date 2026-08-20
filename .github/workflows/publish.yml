@@ -1,0 +1,107 @@
+# 公开仓的发布 workflow —— 由 scripts/sync-public-sdk.sh 同步到
+# .github/workflows/publish.yml。**源文件在 monorepo，改这里，不要改公开仓那份**
+# （下一次同步会覆盖它）。
+#
+# 用 PyPI Trusted Publishing（OIDC）：没有长期 token，GitHub 用短时效身份令牌
+# 向 PyPI 证明「我是这个仓库的这个 workflow」。PyPI 那边的配置必须逐字对上：
+#
+#     PyPI Project Name   sagax-amadeus
+#     Owner               mortysean
+#     Repository name     sagax_amadeus_python
+#     Workflow name       publish.yml
+#     Environment name    pypi
+#
+# 对不上的症状是发布那一刻报 "not a valid publisher"，而错误信息不会告诉你
+# 是哪一项对不上 —— 仓库名大小写、workflow 文件名、环境名，三处都查。
+name: publish
+
+on:
+  push:
+    tags: ["v*"]        # 只有打 tag 才发版。每次 push 都发的话，一个手滑的
+                        # commit 就会占掉一个再也拿不回来的版本号。
+
+permissions:
+  contents: read
+
+jobs:
+  # 测试和发布分成两个 job：发布 job 拿着 id-token 权限，能以仓库身份向 PyPI
+  # 认证。测试 job 不需要那个权限，也就不该有 —— 跑测试的地方权限越小越好。
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # pyproject 里声明支持 3.10+，那就每一档都真跑一遍。声明支持却没测过
+        # 的版本，等于让用户替我们发现问题。
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: 装包与测试依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pytest
+      - name: 跑测试
+        # 依赖闭源引擎的那 20 个用例在这里会自动跳过（HAS_CLOUD=False）。
+        run: python -m pytest tests/ -q
+
+      - name: 确认零运行时依赖
+        # 薄客户端只用标准库。哪天有人顺手加了个 requests，这里会红。
+        run: |
+          python - <<'PY'
+          import importlib.metadata as md
+          hard = [r for r in (md.requires("sagax-amadeus") or [])
+                  if "extra ==" not in r]
+          assert not hard, f"SDK 不该有运行时依赖: {hard}"
+          print("✓ 零依赖")
+          PY
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 构建 wheel + sdist
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: tag 必须与 pyproject 的版本号一致
+        # 打错 tag 会发出一个版本号和内容对不上的包，而 PyPI 不允许重传同一个
+        # 版本号 —— 发现的时候已经晚了。
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          [ "$TAG" = "$PKG" ] || {
+            echo "::error::tag v$TAG 与 pyproject 版本 $PKG 不一致"; exit 1; }
+          echo "✓ v$TAG"
+
+      - name: twine check
+        run: |
+          python -m pip install twine
+          python -m twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi        # 必须和 PyPI 表单里的 Environment name 一致
+    permissions:
+      id-token: write        # OIDC：Trusted Publishing 全靠它，缺了直接 401
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        # 不传 password/api-token：有 id-token 权限时它自动走 OIDC。
+        # 传了反而会绕开 Trusted Publishing。

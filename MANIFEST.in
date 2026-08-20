@@ -1,0 +1,16 @@
+# sdist 的内容清单。
+#
+# wheel 只装 pyproject 的 packages 清单里的东西，sdist **不看那个清单** ——
+# 它会把构建根下能扫到的源文件都塞进 tar.gz。所以这里必须显式列全。
+#
+# 这个构建根里本来就没有云端代码（它在 ../sagax-audit-cloud/），
+# 所以「云端源码泄进 sdist」在这里不是靠 prune 挡住的，是根本没有可泄的东西。
+# 下面这条 prune 只是万一有人把云端包软链或复制进来时的第二道闸，
+# 以及 test/test_sagax_audit_dist.py 会验证两个发行包里都没有云端模块。
+prune sagax_audit_cloud
+prune tests
+global-exclude __pycache__
+global-exclude *.py[cod]
+
+include README.md
+include LICENSE

@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+# Sagax Amadeus SDK —— 客户 `pip install` 的那一半，Apache-2.0 开源。
+#
+# 这是产品里唯一开源的部分：客户要读它、要审计它的网络行为、要把它嵌进自己的
+# 合规流程，所以它必须可读。审计引擎（packages/sagax-audit-cloud/）是订阅服务，
+# 保持专有 —— 两者各有自己的 LICENSE，别混。
+#
+# 环境变量 SAGAX_AUDIT_* 与 MCP 工具名 sagax.* 沿用旧前缀：它们是线上契约，
+# 客户配置里写死的就是它们，不随包名变动。
+#
+# 这个目录**只有 SDK 源码**。云端运行时在隔壁 packages/sagax-audit-cloud/，
+# 不在这个构建根里，所以它进不了 wheel 也进不了 sdist —— 边界是物理的，
+# 不是靠一份「构建时记得排除」的清单。改造前两半在同一个包目录里，
+# 全靠 scripts/build-sdk.sh 把 cloud/ rm 掉；漏一次就把公共规则内容和订阅
+# 计量整包传上 PyPI，而且撤不回来。
+#
+# 零运行时依赖是有意的：薄 HTTP 客户端不该往客户的依赖树里塞 pydantic。
+# 数据结构用标准库 dataclass（sagax_amadeus/models.py）。
+[project]
+name = "sagax-amadeus"
+version = "3.0.1"
+description = "Sagax Amadeus —— 投研审计智能体的公网 API 客户端（薄 HTTP SDK）"
+readme = "README.md"
+requires-python = ">=3.10"
+# 开源客户端。选 Apache-2.0 而不是 MIT：客户多是金融机构，法务过一个带显式
+# 专利授权条款的许可证阻力最小。审计引擎另行授权，不在本包内。
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["audit", "investment-research", "llm", "agent", "compliance",
+            "financial-data", "mcp", "api-client", "sdk"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Financial and Insurance Industry",
+    # 授权写在上面的 license 表达式里。PEP 639 之后再放 "License ::" 分类器
+    # 会被 setuptools 直接判错，别加回来。
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Software Development :: Quality Assurance",
+    "Natural Language :: Chinese (Simplified)",
+]
+# 无运行时依赖。只用标准库 urllib + json + dataclasses。
+dependencies = []
+
+[project.scripts]
+sagax-amadeus = "sagax_amadeus.cli:main"
+
+[project.urls]
+# 指向公开的 SDK 仓，不是内部 monorepo（那个是私有的，匿名访问 404）。
+# PyPI 的元数据**按版本冻结**：已发布的 3.0.0/3.0.1 没有这一栏，补不上去，
+# 这里填的从下一个版本开始生效。
+Homepage = "https://github.com/mortysean/sagax_amadeus_python"
+Source = "https://github.com/mortysean/sagax_amadeus_python"
+Issues = "https://github.com/mortysean/sagax_amadeus_python/issues"
+
+[tool.setuptools]
+packages = ["sagax_amadeus"]
