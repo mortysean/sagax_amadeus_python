@@ -1,0 +1,124 @@
+"""Sagax Amadeus SDK — Sagax Amadeus 公网 API 的 Python 客户端。
+
+    pip install sagax-amadeus
+
+    from sagax_amadeus import SagaxAuditClient, EvidenceItem
+
+    client = SagaxAuditClient(base_url="https://audit.example.com",
+                              api_key="sagax_sk_…")
+    result = client.review("2025年报点评.md")   # 证据可以不给
+    print(result.grade.letter, result.blocking)
+    print(result.coverage_note)              # 抽了几条、其中几条可核验
+    for note in result.annotations:
+        print(note.severity, note.quote, "→", note.comment)
+
+**这是一个薄 HTTP 客户端。** 它不在本地执行审阅：不解析文档、没有校验器、
+不评级、不生成报告、不存私有知识库。这些全部在 Sagax Amadeus 云端引擎上执行，
+SDK 负责把文档发过去、把标注取回来。
+
+数据去向要说清楚：你上传的原始 Evidence、私有 Memory、私有 Skill、私有
+LLM Wiki 都会经 HTTPS **上传到云端**，按租户隔离存放。它们不会被其他租户检索
+到，默认也不用于模型训练。需要数据完全不出机房的部署形态，联系我们谈私有化 ——
+那是另一套交付，不是这个包的默认行为。
+
+模块地图::
+
+    client.py        SagaxAuditClient（同步）
+    async_client.py  AsyncSagaxAuditClient（异步）
+    transport.py     HTTP 传输：鉴权、超时、重试、错误映射
+    models.py        公开 API 数据结构（标准库 dataclass，零依赖）
+    exceptions.py    异常类型
+    cli.py           sagax-amadeus 命令行
+    mcp_server.py    MCP Server（把云端能力暴露给 Agent）
+
+这个包**没有任何运行时依赖**，也不依赖 ``sagax_audit_cloud``（云端服务包）。
+
+发行名与导入名在 2.1.0 从 ``sagax-audit`` / ``sagax_audit`` 改成
+3.0.0 是第一个公开发布的版本，Apache-2.0。它不带任何改名兼容层：只有
+``sagax_amadeus`` 一个导入名、``sagax-amadeus`` 一个命令。
+
+**4.0.0 是破坏性变更**：产品从「审计结构化字段并自动改」变成「审一份文档、
+还回标注」。``check()`` / ``audit()`` / ``create_audit()`` / ``wait_for_audit()``
+与 ``RepairPlan`` 全部移除，对外只剩 ``review()``。所以是大版本而不是补丁号 ——
+按 ``>=3`` 装的人会拿到 4.x 然后 AttributeError，那道版本墙就是拦这个的。
+
+**4.1.0：证据可以不给了。** 服务端会为报告里点了名的财务指标自己去数据源取真值，
+所以最简单的用法就是 ``client.review("report.pdf")``。``review()`` 新增两个可选
+参数：``code``（证券代码，不给则由服务端从正文里认）与 ``auto_evidence``
+（默认 True，设 False 退回只用你给的证据）。**旧调用一行不用改** —— 这是新增，
+不是改签名。
+
+自己给证据仍然更强：那是你声明「这个数来自这里」，比服务端事后独立查更贴近你
+实际用的口径。两者会合并。服务端取不到的部分**不会被当成通过**，它们进
+``coverage_note`` 的「未核验」—— 主体、期间、口径任一含糊，服务端就不取数，
+因为猜错会把一个正确的数字标成错的。
+
+**4.1.1**：MCP ``sagax.review`` 的工具描述补上行为边界（没查的不算通过、
+不要随手换数、粉饰不是修复）；客户文档与 4.1.0 的自动取证口径对齐。API 不变。
+
+环境变量 ``SAGAX_AUDIT_*`` 与 MCP 工具名 ``sagax.*`` 沿用产品原名，和包名不一致
+是**有意的** —— 它们是线上契约，客户配置与服务端认证里写死的就是它们。
+"""
+
+import importlib.metadata as _metadata
+
+from sagax_amadeus.async_client import AsyncAuditClient, AsyncSagaxAuditClient
+from sagax_amadeus.client import AuditClient, SagaxAuditClient
+from sagax_amadeus.exceptions import (APIConnectionError, APIStatusError,
+                                    APITimeoutError, AuditFailedError,
+                                    AuditTimeoutError, AuthenticationError,
+                                    ConfigurationError, ConflictError,
+                                    InsecureTransportError, NotFoundError,
+                                    PayloadTooLargeError, PermissionDeniedError,
+                                    QuotaExceededError, RateLimitError,
+                                    SagaxAuditError, ServerError,
+                                    ValidationError)
+from sagax_amadeus.models import (Annotation, AuditFinding, AuditResult,
+                                AuditVerdict, CandidateOutput, Deduction,
+                                Evidence, EvidenceItem, Grade, Memory,
+                                OutputField, ReviewResult, RiskSummary,
+                                ServiceVersion, Severity, Skill, TextSpan,
+                                TraceEvent, Usage, VerdictStatus, Visibility,
+                                VisibilityMeta, WikiDocument)
+from sagax_amadeus.transport import HttpTransport, mask_key
+
+#: 版本号的唯一真相是 ``pyproject.toml``，这里从已安装的包元数据读回来。
+#:
+#: 写成字面量会和 pyproject 各自漂移，而且漂移了没人会发现：3.0.0 就是这么
+#: 发出去的 —— pyproject 写 3.0.0、这里还留着 2.1.0，于是 ``--version`` 和
+#: MCP 握手都报了错的版本，直到从 PyPI 装回来才看出来。发行包撤不回，
+#: 只能再发一版；所以这里改成派生，让这类错误在结构上不可能发生。
+try:
+    __version__ = _metadata.version("sagax-amadeus")
+except _metadata.PackageNotFoundError:   # 直接从源码树 import，没走安装
+    __version__ = "0.0.0.dev0+source"
+
+__product__ = "Sagax Amadeus SDK"
+__product_zh__ = "Sagax 审计智能体 SDK"
+
+#: 这个 SDK 说的 API 版本。与云端 ``GET /v1/version`` 的 ``api_version`` 比对。
+API_VERSION = "v1"
+
+__all__ = [
+    "__version__", "__product__", "__product_zh__", "API_VERSION",
+    # 客户端
+    "SagaxAuditClient", "AuditClient",
+    "AsyncSagaxAuditClient", "AsyncAuditClient",
+    "HttpTransport", "mask_key",
+    # 数据结构 —— 审阅
+    "ReviewResult", "Annotation", "TextSpan", "Grade", "Deduction",
+    "RiskSummary",
+    # 数据结构 —— 其余
+    "AuditResult", "AuditVerdict", "AuditFinding",
+    "CandidateOutput", "OutputField",
+    "Evidence", "EvidenceItem", "Memory", "Skill", "WikiDocument",
+    "TraceEvent", "Usage", "ServiceVersion", "VisibilityMeta",
+    "VerdictStatus", "Severity", "Visibility",
+    # 异常
+    "SagaxAuditError", "ConfigurationError", "InsecureTransportError",
+    "APIConnectionError", "APITimeoutError", "APIStatusError",
+    "AuthenticationError", "QuotaExceededError", "PermissionDeniedError",
+    "NotFoundError", "ConflictError", "PayloadTooLargeError",
+    "ValidationError", "RateLimitError", "ServerError",
+    "AuditFailedError", "AuditTimeoutError",
+]
